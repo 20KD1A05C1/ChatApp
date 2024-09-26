@@ -17,54 +17,69 @@ def extract_text_from_docx(doc_file):
     text = '\n'.join([para.text for para in doc.paragraphs])
     return text
 
-# Function to split large document into chunks to handle token limits
-def split_text_into_chunks(text, max_chunk_size=512):
-    words = text.split()
-    chunks = [' '.join(words[i:i+max_chunk_size]) for i in range(0, len(words), max_chunk_size)]
-    return chunks
-
-# Function to interact with Hugging Face API for generative models (larger models)
-def generate_answer_hf(text, question):
+# Function to interact with Hugging Face API for summarization
+def summarize_text_hf(text):
     api_key = st.secrets["huggingface_api_key"]  # Get Hugging Face API key securely
-    model = "bigscience/bloom"  # You can replace this with a larger generative model if needed
+    model = "facebook/bart-large-cnn"  # Summarization model
 
     url = f"https://api-inference.huggingface.co/models/{model}"
     
     headers = {
         "Authorization": f"Bearer {api_key}"
     }
-    
-    # Send the request in chunks if the document is large
-    chunks = split_text_into_chunks(text)
 
-    all_answers = []
-    
-    for chunk in chunks:
-        prompt = f"Context: {chunk}\nQuestion: {question}\nAnswer:"
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 300,  # You can adjust this to control the length of the answer
-                "temperature": 0.7  # Increase for more diverse answers, decrease for more focused
-            }
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "max_length": 512,  # Control the max length of the summary
+            "min_length": 100,
+            "do_sample": False
         }
+    }
 
-        response = requests.post(url, headers=headers, json=payload)
-        
-        if response.status_code == 200:
-            generated_text = response.json()[0].get("generated_text", "Sorry, I could not find an answer.")
-            all_answers.append(generated_text)
-        else:
-            all_answers.append(f"Error: {response.status_code}, {response.text}")
+    response = requests.post(url, headers=headers, json=payload)
     
-    # Combine all chunk answers into one cohesive answer
-    return ' '.join(all_answers)
+    if response.status_code == 200:
+        summary = response.json()[0].get('summary_text', 'Sorry, I could not summarize the document.')
+    else:
+        summary = f"Error: {response.status_code}, {response.text}"
+    
+    return summary
+
+# Function to interact with Hugging Face API for Q&A based on the summarized document
+def generate_answer_hf(summary, question):
+    api_key = st.secrets["huggingface_api_key"]  # Get Hugging Face API key securely
+    model = "bigscience/bloom"  # Generative model
+
+    url = f"https://api-inference.huggingface.co/models/{model}"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    prompt = f"Context: {summary}\nQuestion: {question}\nAnswer:"
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 300,  # You can adjust this to control the length of the answer
+            "temperature": 0.5
+        }
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        generated_text = response.json()[0].get("generated_text", "Sorry, I could not find an answer.")
+    else:
+        generated_text = f"Error: {response.status_code}, {response.text}"
+    
+    return generated_text
 
 # Streamlit app
 def main():
     st.title("Chat App with Document Support (Using Hugging Face)")
 
-    st.write("Upload a PDF or DOCX file, then ask questions based on its content.")
+    st.write("Upload a PDF or DOCX file, then ask questions based on its summarized content.")
     
     # Upload PDF or DOCX
     uploaded_file = st.file_uploader("Upload a PDF or DOCX file", type=['pdf', 'docx'])
@@ -78,14 +93,19 @@ def main():
         
         st.write("Document uploaded successfully.")
         
+        # Summarize the document
+        st.write("Summarizing the document...")
+        summary = summarize_text_hf(document_text)
+        st.write("Summary of the document:", summary)
+        
         # Chat functionality
-        st.write("Now you can ask questions related to the document.")
+        st.write("Now you can ask questions related to the document summary.")
         
         question = st.text_input("Enter your question:")
         
         if question:
-            # Answering the question based on document
-            answer = generate_answer_hf(document_text, question)
+            # Answering the question based on the summary
+            answer = generate_answer_hf(summary, question)
             st.write("Answer:", answer)
 
 if __name__ == "__main__":
